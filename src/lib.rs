@@ -27,7 +27,7 @@
 //! logical-high, `false` for logical-low.
 //!
 //! ```rust
-//! use debouncr::debounce_4;
+//! use debouncr::{DebouncerExt, debounce_4};
 //!
 //! let mut debouncer = debounce_4(false); // Type: Debouncer<u8, Repeat4>
 //! ```
@@ -38,7 +38,7 @@
 //! internal state.
 //!
 //! ```rust
-//! use debouncr::{debounce_3, Edge};
+//! use debouncr::{debounce_3, Edge, DebouncerExt};
 //!
 //! let mut debouncer = debounce_3(false);
 //! # fn poll_button() -> bool { true };
@@ -57,7 +57,7 @@
 //! recent updates were pressed, then the debounced state will be high.
 //!
 //! ```rust
-//! use debouncr::debounce_3;
+//! use debouncr::{DebouncerExt, debounce_3};
 //!
 //! let mut debouncer = debounce_3(false);
 //!
@@ -86,7 +86,7 @@
 //! state in addition to the debouncing updates.
 //!
 //! ```rust
-//! use debouncr::{debounce_stateful_3, Edge};
+//! use debouncr::{debounce_stateful_3, Edge, DebouncerExt};
 //!
 //! let mut debouncer = debounce_stateful_3(false);
 //!
@@ -111,7 +111,7 @@
 //! register a resource and a timer.
 //!
 //! ```ignore
-//! use debouncr::{Debouncer, debounce_12, Edge, Repeat12};
+//! use debouncr::{DebouncerExt, Debouncer, debounce_12, Edge, Repeat12};
 //!
 //! #[app(..., monotonic = rtic::cyccnt::CYCCNT)]
 //! const APP: () = {
@@ -197,8 +197,11 @@ use doc_comment::doc_comment;
 /// To create an instance, use the appropriate `debounce_X` function (where `X`
 /// is the number of required consecutive logical-high states).
 #[repr(transparent)]
-pub struct Debouncer<S, M> {
-    state: S,
+pub struct Debouncer<M>
+where
+    M: RepeatN,
+{
+    state: M::Type,
     mask: core::marker::PhantomData<M>,
 }
 
@@ -214,8 +217,11 @@ pub struct Debouncer<S, M> {
 /// (and vice versa).
 ///
 /// The memory cost for this is storing an extra enum value per debouncer.
-pub struct DebouncerStateful<S, M> {
-    debouncer: Debouncer<S, M>,
+pub struct DebouncerStateful<M>
+where
+    M: RepeatN,
+{
+    debouncer: Debouncer<M>,
     last_edge: Edge,
 }
 
@@ -226,6 +232,31 @@ pub enum Edge {
     Rising,
     /// A falling edge
     Falling,
+}
+
+mod seal {
+    pub trait Sealed {}
+}
+
+/// A trait that represents all RepeatN structs
+pub trait RepeatN: seal::Sealed {
+    /// The inner type wrapped by Debouncer
+    type Type;
+}
+
+/// A trait to group all initializable Debouncer<M>
+pub trait DebouncerExt {
+    /// Create a new debouncer with initial state
+    fn new(pressed: bool) -> Self;
+
+    /// Update the state.
+    fn update(&mut self, pressed: bool) -> Option<Edge>;
+
+    /// Return `true` if the debounced state is logical high.
+    fn is_high(&self) -> bool;
+
+    /// Return `true` if the debounced state is logical low.
+    fn is_low(&self) -> bool;
 }
 
 macro_rules! impl_logic {
@@ -245,37 +276,18 @@ macro_rules! impl_logic {
             pub struct $M;
         }
 
-        doc_comment! {
-            concat!(
-                "Create a new debouncer that can detect a rising or falling edge of ",
-                $count,
-                " consecutive logical states.",
-            ),
-            pub fn $name(initial_state_pressed: bool) -> Debouncer<$T, $M> {
-                Debouncer {
-                    state: if initial_state_pressed { $mask } else { 0 },
-                    mask: core::marker::PhantomData,
-                }
-            }
+        impl seal::Sealed for $M {}
+
+        impl RepeatN for $M {
+            type Type = $T;
         }
 
-        doc_comment! {
-            concat!(
-                "Create a new stateful debouncer that can detect stable state changes after ",
-                $count,
-                " consecutive logical states.",
-            ),
-            pub fn $name_stateful(initial_state_pressed: bool) -> DebouncerStateful<$T, $M> {
-                DebouncerStateful {
-                    debouncer: $name(initial_state_pressed),
-                    last_edge: if initial_state_pressed {Edge::Rising} else {Edge::Falling},
-                }
+        impl DebouncerExt for Debouncer<$M> {
+            fn new(pressed: bool) -> Self {
+                $name(pressed)
             }
-        }
 
-        impl Debouncer<$T, $M> {
-            /// Update the state.
-            pub fn update(&mut self, pressed: bool) -> Option<Edge> {
+            fn update(&mut self, pressed: bool) -> Option<Edge> {
                 // If all bits are already 1 or 0 and there was no change,
                 // we can immediately return.
                 if self.state == $mask && pressed {
@@ -298,20 +310,49 @@ macro_rules! impl_logic {
                 }
             }
 
-            /// Return `true` if the debounced state is logical high.
-            pub fn is_high(&self) -> bool {
+            fn is_high(&self) -> bool {
                 self.state == $mask
             }
 
-            /// Return `true` if the debounced state is logical low.
-            pub fn is_low(&self) -> bool {
+            fn is_low(&self) -> bool {
                 self.state == 0
             }
         }
 
-        impl DebouncerStateful<$T, $M> {
-            /// Update the state.
-            pub fn update(&mut self, pressed: bool) -> Option<Edge> {
+        doc_comment! {
+            concat!(
+                "Create a new debouncer that can detect a rising or falling edge of ",
+                $count,
+                " consecutive logical states.",
+            ),
+            pub fn $name(initial_state_pressed: bool) -> Debouncer<$M> {
+                Debouncer {
+                    state: if initial_state_pressed { $mask } else { 0 },
+                    mask: core::marker::PhantomData,
+                }
+            }
+        }
+
+        doc_comment! {
+            concat!(
+                "Create a new stateful debouncer that can detect stable state changes after ",
+                $count,
+                " consecutive logical states.",
+            ),
+            pub fn $name_stateful(initial_state_pressed: bool) -> DebouncerStateful<$M> {
+                DebouncerStateful {
+                    debouncer: $name(initial_state_pressed),
+                    last_edge: if initial_state_pressed {Edge::Rising} else {Edge::Falling},
+                }
+            }
+        }
+
+        impl DebouncerExt for DebouncerStateful<$M> {
+            fn new(pressed: bool) -> Self {
+                $name_stateful(pressed)
+            }
+
+            fn update(&mut self, pressed: bool) -> Option<Edge> {
                 self.debouncer.update(pressed).and_then(|edge| {
                     if edge != self.last_edge {
                         self.last_edge = edge;
@@ -322,34 +363,88 @@ macro_rules! impl_logic {
                 })
             }
 
-            /// Return `true` if the debounced state is logical high.
-            pub fn is_high(&self) -> bool {
+            fn is_high(&self) -> bool {
                 self.debouncer.is_high()
             }
 
-            /// Return `true` if the debounced state is logical low.
-            pub fn is_low(&self) -> bool {
+            fn is_low(&self) -> bool {
                 self.debouncer.is_low()
             }
         }
     };
 }
 
-impl_logic!(u8,  2,  Repeat2,  debounce_2,  debounce_stateful_2,  0b0000_0011);
-impl_logic!(u8,  3,  Repeat3,  debounce_3,  debounce_stateful_3,  0b0000_0111);
-impl_logic!(u8,  4,  Repeat4,  debounce_4,  debounce_stateful_4,  0b0000_1111);
-impl_logic!(u8,  5,  Repeat5,  debounce_5,  debounce_stateful_5,  0b0001_1111);
-impl_logic!(u8,  6,  Repeat6,  debounce_6,  debounce_stateful_6,  0b0011_1111);
-impl_logic!(u8,  7,  Repeat7,  debounce_7,  debounce_stateful_7,  0b0111_1111);
-impl_logic!(u8,  8,  Repeat8,  debounce_8,  debounce_stateful_8,  0b1111_1111);
-impl_logic!(u16, 9,  Repeat9,  debounce_9,  debounce_stateful_9,  0b0000_0001_1111_1111);
-impl_logic!(u16, 10, Repeat10, debounce_10, debounce_stateful_10, 0b0000_0011_1111_1111);
-impl_logic!(u16, 11, Repeat11, debounce_11, debounce_stateful_11, 0b0000_0111_1111_1111);
-impl_logic!(u16, 12, Repeat12, debounce_12, debounce_stateful_12, 0b0000_1111_1111_1111);
-impl_logic!(u16, 13, Repeat13, debounce_13, debounce_stateful_13, 0b0001_1111_1111_1111);
-impl_logic!(u16, 14, Repeat14, debounce_14, debounce_stateful_14, 0b0011_1111_1111_1111);
-impl_logic!(u16, 15, Repeat15, debounce_15, debounce_stateful_15, 0b0111_1111_1111_1111);
-impl_logic!(u16, 16, Repeat16, debounce_16, debounce_stateful_16, 0b1111_1111_1111_1111);
+impl_logic!(u8, 2, Repeat2, debounce_2, debounce_stateful_2, 0b0000_0011);
+impl_logic!(u8, 3, Repeat3, debounce_3, debounce_stateful_3, 0b0000_0111);
+impl_logic!(u8, 4, Repeat4, debounce_4, debounce_stateful_4, 0b0000_1111);
+impl_logic!(u8, 5, Repeat5, debounce_5, debounce_stateful_5, 0b0001_1111);
+impl_logic!(u8, 6, Repeat6, debounce_6, debounce_stateful_6, 0b0011_1111);
+impl_logic!(u8, 7, Repeat7, debounce_7, debounce_stateful_7, 0b0111_1111);
+impl_logic!(u8, 8, Repeat8, debounce_8, debounce_stateful_8, 0b1111_1111);
+impl_logic!(
+    u16,
+    9,
+    Repeat9,
+    debounce_9,
+    debounce_stateful_9,
+    0b0000_0001_1111_1111
+);
+impl_logic!(
+    u16,
+    10,
+    Repeat10,
+    debounce_10,
+    debounce_stateful_10,
+    0b0000_0011_1111_1111
+);
+impl_logic!(
+    u16,
+    11,
+    Repeat11,
+    debounce_11,
+    debounce_stateful_11,
+    0b0000_0111_1111_1111
+);
+impl_logic!(
+    u16,
+    12,
+    Repeat12,
+    debounce_12,
+    debounce_stateful_12,
+    0b0000_1111_1111_1111
+);
+impl_logic!(
+    u16,
+    13,
+    Repeat13,
+    debounce_13,
+    debounce_stateful_13,
+    0b0001_1111_1111_1111
+);
+impl_logic!(
+    u16,
+    14,
+    Repeat14,
+    debounce_14,
+    debounce_stateful_14,
+    0b0011_1111_1111_1111
+);
+impl_logic!(
+    u16,
+    15,
+    Repeat15,
+    debounce_15,
+    debounce_stateful_15,
+    0b0111_1111_1111_1111
+);
+impl_logic!(
+    u16,
+    16,
+    Repeat16,
+    debounce_16,
+    debounce_stateful_16,
+    0b1111_1111_1111_1111
+);
 
 #[cfg(test)]
 mod tests {
@@ -358,7 +453,7 @@ mod tests {
     #[test]
     fn test_rising_edge() {
         // Initially not pressed
-        let mut debouncer: Debouncer<u8, Repeat3> = debounce_3(false);
+        let mut debouncer: Debouncer<Repeat3> = debounce_3(false);
         assert!(debouncer.is_low());
 
         // Three pressed updates required
@@ -379,7 +474,7 @@ mod tests {
     #[test]
     fn test_falling_edge() {
         // Initially not pressed
-        let mut debouncer: Debouncer<u8, Repeat3> = debounce_3(false);
+        let mut debouncer: Debouncer<Repeat3> = debounce_3(false);
         assert!(debouncer.is_low());
 
         // A single non-pressed update does not trigger
@@ -398,7 +493,7 @@ mod tests {
     #[test]
     fn test_debounce_16() {
         // Sixteen pressed updates required
-        let mut debouncer: Debouncer<u16, Repeat16> = debounce_16(false);
+        let mut debouncer: Debouncer<Repeat16> = debounce_16(false);
         assert!(debouncer.is_low());
         for _ in 0..15 {
             assert_eq!(debouncer.update(true), None);
@@ -413,7 +508,7 @@ mod tests {
     #[test]
     fn test_is_low_high() {
         // Initially low
-        let mut debouncer: Debouncer<u8, Repeat8> = debounce_8(false);
+        let mut debouncer: Debouncer<Repeat8> = debounce_8(false);
         assert!(debouncer.is_low());
         assert!(!debouncer.is_high());
 
@@ -505,6 +600,31 @@ mod tests {
         assert_eq!(debouncer.update(true), None);
         assert_eq!(debouncer.update(false), None);
         assert_eq!(debouncer.update(false), Some(Edge::Falling));
+    }
 
+    /// Ensure we can create a struct with generic debouncer
+    #[test]
+    fn test_generic_debouncer() {
+        struct MyStruct<T: DebouncerExt> {
+            debouncer: T,
+        }
+
+        impl<T: DebouncerExt> MyStruct<T> {
+            pub fn new(initial_state: bool) -> Self {
+                Self {
+                    debouncer: T::new(initial_state),
+                }
+            }
+
+            pub fn update(&mut self, pressed: bool) -> Option<Edge> {
+                self.debouncer.update(pressed)
+            }
+        }
+
+        let mut wrapped = MyStruct::<Debouncer<Repeat4>>::new(false);
+        assert_eq!(wrapped.update(true), None);
+        assert_eq!(wrapped.update(true), None);
+        assert_eq!(wrapped.update(true), None);
+        assert_eq!(wrapped.update(true), Some(Edge::Rising));
     }
 }
