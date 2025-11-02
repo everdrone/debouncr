@@ -197,6 +197,7 @@ use doc_comment::doc_comment;
 /// To create an instance, use the appropriate `debounce_X` function (where `X`
 /// is the number of required consecutive logical-high states).
 #[repr(transparent)]
+#[derive(Clone)]
 pub struct Debouncer<M>
 where
     M: RepeatN,
@@ -217,6 +218,7 @@ where
 /// (and vice versa).
 ///
 /// The memory cost for this is storing an extra enum value per debouncer.
+#[derive(Clone)]
 pub struct DebouncerStateful<M>
 where
     M: RepeatN,
@@ -239,9 +241,9 @@ mod seal {
 }
 
 /// A trait that represents all RepeatN structs
-pub trait RepeatN: seal::Sealed + Clone + Copy {
+pub trait RepeatN: seal::Sealed + Clone {
     /// The inner type wrapped by Debouncer
-    type Type;
+    type Type: Clone;
 }
 
 /// A trait to group all initializable Debouncer<M>
