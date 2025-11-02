@@ -239,7 +239,7 @@ mod seal {
 }
 
 /// A trait that represents all RepeatN structs
-pub trait RepeatN: seal::Sealed {
+pub trait RepeatN: seal::Sealed + Clone + Copy {
     /// The inner type wrapped by Debouncer
     type Type;
 }
@@ -273,6 +273,7 @@ macro_rules! impl_logic {
                 $count,
                 ".html).",
             ),
+            #[derive(Clone, Copy)]
             pub struct $M;
         }
 
